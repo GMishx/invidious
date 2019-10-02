@@ -1,11 +1,13 @@
 struct SearchVideo
-  def to_xml(host_url, auto_generated, xml : XML::Builder)
+  def to_xml(host_url, auto_generated, query_params, xml : XML::Builder)
+    query_params["v"] = self.id
+
     xml.element("entry") do
       xml.element("id") { xml.text "yt:video:#{self.id}" }
       xml.element("yt:videoId") { xml.text self.id }
       xml.element("yt:channelId") { xml.text self.ucid }
       xml.element("title") { xml.text self.title }
-      xml.element("link", rel: "alternate", href: "#{host_url}/watch?v=#{self.id}")
+      xml.element("link", rel: "alternate", href: "#{host_url}/watch?#{query_params}")
 
       xml.element("author") do
         if auto_generated
@@ -19,7 +21,7 @@ struct SearchVideo
 
       xml.element("content", type: "xhtml") do
         xml.element("div", xmlns: "http://www.w3.org/1999/xhtml") do
-          xml.element("a", href: "#{host_url}/watch?v=#{self.id}") do
+          xml.element("a", href: "#{host_url}/watch?#{query_params}") do
             xml.element("img", src: "#{host_url}/vi/#{self.id}/mqdefault.jpg")
           end
         end
@@ -40,12 +42,12 @@ struct SearchVideo
     end
   end
 
-  def to_xml(host_url, auto_generated, xml : XML::Builder | Nil = nil)
+  def to_xml(host_url, auto_generated, query_params, xml : XML::Builder | Nil = nil)
     if xml
-      to_xml(host_url, auto_generated, xml)
+      to_xml(host_url, auto_generated, query_params, xml)
     else
       XML.build do |json|
-        to_xml(host_url, auto_generated, xml)
+        to_xml(host_url, auto_generated, query_params, xml)
       end
     end
   end
@@ -266,7 +268,7 @@ def search(query, page = 1, search_params = produce_search_params(content_type: 
     return {0, [] of SearchItem}
   end
 
-  html = client.get("/results?q=#{URI.escape(query)}&page=#{page}&sp=#{search_params}&hl=en&disable_polymer=1").body
+  html = client.get("/results?q=#{URI.encode_www_form(query)}&page=#{page}&sp=#{search_params}&hl=en&disable_polymer=1").body
   if html.empty?
     return {0, [] of SearchItem}
   end
@@ -371,7 +373,7 @@ def produce_search_params(sort : String = "relevance", date : String = "", conte
   end
 
   token = Base64.urlsafe_encode(token.to_slice)
-  token = URI.escape(token)
+  token = URI.encode_www_form(token)
 
   return token
 end
@@ -396,7 +398,7 @@ def produce_channel_search_url(ucid, query, page)
 
   data.rewind
   data = Base64.urlsafe_encode(data)
-  continuation = URI.escape(data)
+  continuation = URI.encode_www_form(data)
 
   data = IO::Memory.new
 
@@ -421,7 +423,7 @@ def produce_channel_search_url(ucid, query, page)
   IO.copy data, buffer
 
   continuation = Base64.urlsafe_encode(buffer)
-  continuation = URI.escape(continuation)
+  continuation = URI.encode_www_form(continuation)
 
   url = "/browse_ajax?continuation=#{continuation}&gl=US&hl=en"
 

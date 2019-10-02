@@ -17,7 +17,6 @@
 require "digest/md5"
 require "file_utils"
 require "kemal"
-require "markdown"
 require "openssl/hmac"
 require "option_parser"
 require "pg"
@@ -86,6 +85,7 @@ LOCALES = {
   "nl"    => load_locale("nl"),
   "pl"    => load_locale("pl"),
   "ru"    => load_locale("ru"),
+  "tr"    => load_locale("tr"),
   "uk"    => load_locale("uk"),
   "zh-CN" => load_locale("zh-CN"),
 }
@@ -296,7 +296,7 @@ before_all do |env|
     current_page += "?#{query}"
   end
 
-  env.set "current_page", URI.escape(current_page)
+  env.set "current_page", URI.encode_www_form(current_page)
 end
 
 get "/" do |env|
@@ -841,7 +841,7 @@ get "/results" do |env|
   page ||= 1
 
   if query
-    env.redirect "/search?q=#{URI.escape(query)}&page=#{page}"
+    env.redirect "/search?q=#{URI.encode_www_form(query)}&page=#{page}"
   else
     env.redirect "/"
   end
@@ -1050,7 +1050,7 @@ post "/login" do |env|
 
       traceback << "done, returned #{response.status_code}.<br/>"
 
-      headers["Cookie"] = URI.unescape(headers["Cookie"])
+      headers["Cookie"] = URI.decode_www_form(headers["Cookie"])
 
       if challenge_results[0][3]?.try &.== 7
         error_message = translate(locale, "Account has temporarily been disabled")
@@ -1059,7 +1059,7 @@ post "/login" do |env|
       end
 
       # TODO: Handle Google's CAPTCHA
-      if captcha = challenge_results[0][-1]?.try &.[-1]?.try &.["5001"]?.try &.[-1].as_a?
+      if captcha = challenge_results[0][-1]?.try &.[-1]?.try &.as_h?.try &.["5001"]?.try &.[-1].as_a?
         error_message = "Unhandled CAPTCHA. Please try again later."
         env.response.status_code = 401
         next templated "error"
@@ -1396,7 +1396,7 @@ post "/login" do |env|
       user_array[4] = user_array[4].to_json
       args = arg_array(user_array)
 
-      PG_DB.exec("INSERT INTO users VALUES (#{args})", user_array)
+      PG_DB.exec("INSERT INTO users VALUES (#{args})", args: user_array)
       PG_DB.exec("INSERT INTO session_ids VALUES ($1, $2, $3)", sid, email, Time.utc)
 
       view_name = "subscriptions_#{sha256(user.email)}"
@@ -2423,7 +2423,7 @@ post "/authorize_token" do |env|
   access_token = generate_token(user.email, scopes, expire, HMAC_KEY, PG_DB)
 
   if callback_url
-    access_token = URI.escape(access_token)
+    access_token = URI.encode_www_form(access_token)
     url = URI.parse(callback_url)
 
     if url.query
@@ -2642,6 +2642,8 @@ get "/feed/channel/:ucid" do |env|
 
   ucid = env.params.url["ucid"]
 
+  params = HTTP::Params.parse(env.params.query["params"]? || "")
+
   begin
     channel = get_about_info(ucid, locale)
   rescue ex : ChannelRedirect
@@ -2704,7 +2706,7 @@ get "/feed/channel/:ucid" do |env|
       end
 
       videos.each do |video|
-        video.to_xml(host_url, channel.auto_generated, xml)
+        video.to_xml(host_url, channel.auto_generated, params, xml)
       end
     end
   end
@@ -2735,6 +2737,8 @@ get "/feed/private" do |env|
   page = env.params.query["page"]?.try &.to_i?
   page ||= 1
 
+  params = HTTP::Params.parse(env.params.query["params"]? || "")
+
   videos, notifications = get_subscription_feed(PG_DB, user, max_results, page)
   host_url = make_host_url(config, Kemal.config)
 
@@ -2748,7 +2752,7 @@ get "/feed/private" do |env|
       xml.element("title") { xml.text translate(locale, "Invidious Private Feed for `x`", user.email) }
 
       (notifications + videos).each do |video|
-        video.to_xml(locale, host_url, xml)
+        video.to_xml(locale, host_url, params, xml)
       end
     end
   end
@@ -2761,6 +2765,8 @@ get "/feed/playlist/:plid" do |env|
 
   plid = env.params.url["plid"]
 
+  params = HTTP::Params.parse(env.params.query["params"]? || "")
+
   host_url = make_host_url(config, Kemal.config)
   path = env.request.path
 
@@ -2771,10 +2777,10 @@ get "/feed/playlist/:plid" do |env|
   document.xpath_nodes(%q(//*[@href]|//*[@url])).each do |node|
     node.attributes.each do |attribute|
       case attribute.name
-      when "url"
-        node["url"] = "#{host_url}#{URI.parse(node["url"]).full_path}"
-      when "href"
-        node["href"] = "#{host_url}#{URI.parse(node["href"]).full_path}"
+      when "url", "href"
+        full_path = URI.parse(node[attribute.name]).full_path
+        query_string_opt = full_path.starts_with?("/watch?v=") ? "&#{params}" : ""
+        node[attribute.name] = "#{host_url}#{full_path}#{query_string_opt}"
       end
     end
   end
@@ -2908,7 +2914,7 @@ post "/feed/webhook/:token" do |env|
       PG_DB.exec("INSERT INTO channel_videos VALUES (#{args}) \
         ON CONFLICT (id) DO UPDATE SET title = $2, published = $3, \
         updated = $4, ucid = $5, author = $6, length_seconds = $7, \
-        live_now = $8, premiere_timestamp = $9, views = $10", video_array)
+        live_now = $8, premiere_timestamp = $9, views = $10", args: video_array)
 
       # Update all users affected by insert
       if emails.empty?
@@ -3327,7 +3333,7 @@ get "/api/v1/captions/:id" do |env|
               json.object do
                 json.field "label", caption.name.simpleText
                 json.field "languageCode", caption.languageCode
-                json.field "url", "/api/v1/captions/#{id}?label=#{URI.escape(caption.name.simpleText)}"
+                json.field "url", "/api/v1/captions/#{id}?label=#{URI.encode_www_form(caption.name.simpleText)}"
               end
             end
           end
@@ -3406,7 +3412,7 @@ get "/api/v1/captions/:id" do |env|
 
   if title = env.params.query["title"]?
     # https://blog.fastmail.com/2011/06/24/download-non-english-filenames/
-    env.response.headers["Content-Disposition"] = "attachment; filename=\"#{URI.escape(title)}\"; filename*=UTF-8''#{URI.escape(title)}"
+    env.response.headers["Content-Disposition"] = "attachment; filename=\"#{URI.encode_www_form(title)}\"; filename*=UTF-8''#{URI.encode_www_form(title)}"
   end
 
   webvtt
@@ -3594,7 +3600,7 @@ get "/api/v1/annotations/:id" do |env|
         id = id.sub(/^-/, 'A')
       end
 
-      file = URI.escape("#{id[0, 3]}/#{id}.xml")
+      file = URI.encode_www_form("#{id[0, 3]}/#{id}.xml")
 
       client = make_client(ARCHIVE_URL)
       location = client.get("/download/youtubeannotations_#{index}/#{id[0, 2]}.tar/#{file}")
@@ -4093,7 +4099,7 @@ get "/api/v1/search/suggestions" do |env|
 
   begin
     client = make_client(URI.parse("https://suggestqueries.google.com"))
-    response = client.get("/complete/search?hl=en&gl=#{region}&client=youtube&ds=yt&q=#{URI.escape(query)}&callback=suggestCallback").body
+    response = client.get("/complete/search?hl=en&gl=#{region}&client=youtube&ds=yt&q=#{URI.encode_www_form(query)}&callback=suggestCallback").body
 
     body = response[35..-2]
     body = JSON.parse(body).as_a
@@ -4477,7 +4483,7 @@ post "/api/v1/auth/tokens/register" do |env|
     access_token = generate_token(user.email, authorized_scopes, expire, HMAC_KEY, PG_DB)
 
     if callback_url
-      access_token = URI.escape(access_token)
+      access_token = URI.encode_www_form(access_token)
 
       if query = callback_url.query
         query = HTTP::Params.parse(query.not_nil!)
@@ -4712,7 +4718,7 @@ get "/api/manifest/hls_playlist/*" do |env|
       raw_params = {} of String => Array(String)
       path.each_slice(2) do |pair|
         key, value = pair
-        value = URI.unescape(value)
+        value = URI.decode_www_form(value)
 
         if raw_params[key]?
           raw_params[key] << value
@@ -4837,7 +4843,7 @@ get "/videoplayback/*" do |env|
   raw_params = {} of String => Array(String)
   path.each_slice(2) do |pair|
     key, value = pair
-    value = URI.unescape(value)
+    value = URI.decode_www_form(value)
 
     if raw_params[key]?
       raw_params[key] << value
@@ -5011,7 +5017,7 @@ get "/videoplayback" do |env|
 
             if title = query_params["title"]?
               # https://blog.fastmail.com/2011/06/24/download-non-english-filenames/
-              env.response.headers["Content-Disposition"] = "attachment; filename=\"#{URI.escape(title)}\"; filename*=UTF-8''#{URI.escape(title)}"
+              env.response.headers["Content-Disposition"] = "attachment; filename=\"#{URI.encode_www_form(title)}\"; filename*=UTF-8''#{URI.encode_www_form(title)}"
             end
 
             if !response.headers.includes_word?("Transfer-Encoding", "chunked")
@@ -5324,4 +5330,6 @@ add_context_storage_type(Preferences)
 add_context_storage_type(User)
 
 Kemal.config.logger = logger
+Kemal.config.host_binding = Kemal.config.host_binding != "0.0.0.0" ? Kemal.config.host_binding : CONFIG.host_binding
+Kemal.config.port = Kemal.config.port != 3000 ? Kemal.config.port : CONFIG.port
 Kemal.run

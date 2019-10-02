@@ -41,13 +41,15 @@ struct ChannelVideo
     end
   end
 
-  def to_xml(locale, host_url, xml : XML::Builder)
+  def to_xml(locale, host_url, query_params, xml : XML::Builder)
+    query_params["v"] = self.id
+
     xml.element("entry") do
       xml.element("id") { xml.text "yt:video:#{self.id}" }
       xml.element("yt:videoId") { xml.text self.id }
       xml.element("yt:channelId") { xml.text self.ucid }
       xml.element("title") { xml.text self.title }
-      xml.element("link", rel: "alternate", href: "#{host_url}/watch?v=#{self.id}")
+      xml.element("link", rel: "alternate", href: "#{host_url}/watch?#{query_params}")
 
       xml.element("author") do
         xml.element("name") { xml.text self.author }
@@ -56,7 +58,7 @@ struct ChannelVideo
 
       xml.element("content", type: "xhtml") do
         xml.element("div", xmlns: "http://www.w3.org/1999/xhtml") do
-          xml.element("a", href: "#{host_url}/watch?v=#{self.id}") do
+          xml.element("a", href: "#{host_url}/watch?#{query_params}") do
             xml.element("img", src: "#{host_url}/vi/#{self.id}/mqdefault.jpg")
           end
         end
@@ -179,14 +181,14 @@ def get_channel(id, db, refresh = true, pull_all_videos = true)
       args = arg_array(channel_array)
 
       db.exec("INSERT INTO channels VALUES (#{args}) \
-        ON CONFLICT (id) DO UPDATE SET author = $2, updated = $3", channel_array)
+        ON CONFLICT (id) DO UPDATE SET author = $2, updated = $3", args: channel_array)
     end
   else
     channel = fetch_channel(id, db, pull_all_videos: pull_all_videos)
     channel_array = channel.to_a
     args = arg_array(channel_array)
 
-    db.exec("INSERT INTO channels VALUES (#{args})", channel_array)
+    db.exec("INSERT INTO channels VALUES (#{args})", args: channel_array)
   end
 
   return channel
@@ -275,7 +277,7 @@ def fetch_channel(ucid, db, pull_all_videos = true, locale = nil)
     db.exec("INSERT INTO channel_videos VALUES (#{args}) \
       ON CONFLICT (id) DO UPDATE SET title = $2, published = $3, \
       updated = $4, ucid = $5, author = $6, length_seconds = $7, \
-      live_now = $8, views = $10", video_array)
+      live_now = $8, views = $10", args: video_array)
 
     # Update all users affected by insert
     if emails.empty?
@@ -343,7 +345,7 @@ def fetch_channel(ucid, db, pull_all_videos = true, locale = nil)
           db.exec("INSERT INTO channel_videos VALUES (#{args}) \
             ON CONFLICT (id) DO UPDATE SET title = $2, published = $3, \
             updated = $4, ucid = $5, author = $6, length_seconds = $7, \
-            live_now = $8, views = $10", video_array)
+            live_now = $8, views = $10", args: video_array)
 
           # Update all users affected by insert
           if emails.empty?
@@ -476,7 +478,7 @@ def produce_channel_videos_url(ucid, page = 1, auto_generated = nil, sort_by = "
   end
 
   data = Base64.urlsafe_encode(data)
-  cursor = URI.escape(data)
+  cursor = URI.encode_www_form(data)
 
   data = IO::Memory.new
 
@@ -497,7 +499,7 @@ def produce_channel_videos_url(ucid, page = 1, auto_generated = nil, sort_by = "
   IO.copy data, buffer
 
   continuation = Base64.urlsafe_encode(buffer)
-  continuation = URI.escape(continuation)
+  continuation = URI.encode_www_form(continuation)
 
   url = "/browse_ajax?continuation=#{continuation}&gl=US&hl=en"
 
@@ -547,7 +549,7 @@ def produce_channel_playlists_url(ucid, cursor, sort = "newest", auto_generated 
 
   data.rewind
   data = Base64.urlsafe_encode(data)
-  continuation = URI.escape(data)
+  continuation = URI.encode_www_form(data)
 
   data = IO::Memory.new
 
@@ -568,7 +570,7 @@ def produce_channel_playlists_url(ucid, cursor, sort = "newest", auto_generated 
   IO.copy data, buffer
 
   continuation = Base64.urlsafe_encode(buffer)
-  continuation = URI.escape(continuation)
+  continuation = URI.encode_www_form(continuation)
 
   url = "/browse_ajax?continuation=#{continuation}&gl=US&hl=en"
 
@@ -578,7 +580,7 @@ end
 def extract_channel_playlists_cursor(url, auto_generated)
   continuation = HTTP::Params.parse(URI.parse(url).query.not_nil!)["continuation"]
 
-  continuation = URI.unescape(continuation)
+  continuation = URI.decode_www_form(continuation)
   data = IO::Memory.new(Base64.decode(continuation))
 
   # 0xe2 0xa9 0x85 0xb2 0x02
@@ -597,7 +599,7 @@ def extract_channel_playlists_cursor(url, auto_generated)
   data.read inner_continuation
 
   continuation = String.new(inner_continuation)
-  continuation = URI.unescape(continuation)
+  continuation = URI.decode_www_form(continuation)
   data = IO::Memory.new(Base64.decode(continuation))
 
   # 0x12 0x09 playlists
@@ -614,7 +616,7 @@ def extract_channel_playlists_cursor(url, auto_generated)
   cursor = String.new(cursor)
 
   if !auto_generated
-    cursor = URI.unescape(cursor)
+    cursor = URI.decode_www_form(cursor)
     cursor = Base64.decode_string(cursor)
   end
 
@@ -877,7 +879,7 @@ def fetch_channel_community(ucid, continuation, locale, config, kemal_config, fo
 end
 
 def produce_channel_community_continuation(ucid, cursor)
-  cursor = URI.escape(cursor)
+  cursor = URI.encode_www_form(cursor)
 
   data = IO::Memory.new
 
@@ -898,13 +900,13 @@ def produce_channel_community_continuation(ucid, cursor)
   IO.copy data, buffer
 
   continuation = Base64.urlsafe_encode(buffer)
-  continuation = URI.escape(continuation)
+  continuation = URI.encode_www_form(continuation)
 
   return continuation
 end
 
 def extract_channel_community_cursor(continuation)
-  continuation = URI.unescape(continuation)
+  continuation = URI.decode_www_form(continuation)
   data = IO::Memory.new(Base64.decode(continuation))
 
   # 0xe2 0xa9 0x85 0xb2 0x02
@@ -923,7 +925,7 @@ def extract_channel_community_cursor(continuation)
     data.read_byte
   end
 
-  return URI.unescape(data.gets_to_end)
+  return URI.decode_www_form(data.gets_to_end)
 end
 
 def get_about_info(ucid, locale)

@@ -408,7 +408,7 @@ struct Video
             json.object do
               json.field "label", caption.name.simpleText
               json.field "languageCode", caption.languageCode
-              json.field "url", "/api/v1/captions/#{id}?label=#{URI.escape(caption.name.simpleText)}"
+              json.field "url", "/api/v1/captions/#{id}?label=#{URI.encode_www_form(caption.name.simpleText)}"
             end
           end
         end
@@ -900,7 +900,7 @@ def get_video(id, db, refresh = true, region = nil, force_refresh = false)
         db.exec("UPDATE videos SET (info,updated,title,views,likes,dislikes,wilson_score,\
           published,description,language,author,ucid,allowed_regions,is_family_friendly,\
           genre,genre_url,license,sub_count_text,author_thumbnail)\
-          = (#{args}) WHERE id = $1", video_array)
+          = (#{args}) WHERE id = $1", args: video_array)
       rescue ex
         db.exec("DELETE FROM videos * WHERE id = $1", id)
         raise ex
@@ -913,7 +913,7 @@ def get_video(id, db, refresh = true, region = nil, force_refresh = false)
     args = arg_array(video_array)
 
     if !region
-      db.exec("INSERT INTO videos VALUES (#{args}) ON CONFLICT (id) DO NOTHING", video_array)
+      db.exec("INSERT INTO videos VALUES (#{args}) ON CONFLICT (id) DO NOTHING", args: video_array)
     end
   end
 
